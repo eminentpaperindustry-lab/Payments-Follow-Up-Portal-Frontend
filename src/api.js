@@ -1,6 +1,8 @@
 import axios from "axios"
 
-const API = "http://localhost:5003/api/payments"
+// const API = "http://localhost:5003/api/payments"
+const API = "https://payments-follow-up-portal.onrender.com/api/payments"
+
 
 export const getParties = () => {
   return axios.get(API + "/parties")
