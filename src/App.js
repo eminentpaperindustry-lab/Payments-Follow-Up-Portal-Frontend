@@ -55,6 +55,7 @@ function App() {
   const [isBulkAction, setIsBulkAction] = useState(false)
   const [currentBillNo, setCurrentBillNo] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [initialLoading, setInitialLoading] = useState(true) // New state for initial load
   const [lastUpdated, setLastUpdated] = useState(new Date())
   const [copySuccess, setCopySuccess] = useState(false)
   const [toast, setToast] = useState(null)
@@ -145,6 +146,7 @@ function App() {
       setPartyOptions(options)
     } catch (error) {
       showToast("Error loading parties", 'error')
+      setInitialLoading(false)
     }
   }
 
@@ -175,14 +177,16 @@ function App() {
       }
       
       const res = await getPayments(apiFilters)
-      setData(res.data)
+      setData(res.data || []) // Ensure data is always an array
       setSelectedRows([])
       setLastUpdated(new Date())
       setCopySuccess(false)
     } catch (error) {
       showToast("Failed to load data", 'error')
+      setData([]) // Set empty array on error
     } finally {
       setLoading(false)
+      setInitialLoading(false)
     }
   }
 
@@ -242,9 +246,12 @@ function App() {
   }
 
   const totalBills = data.length
-  console.log("data: ", data);
-  
   const totalBalance = data.reduce((sum, row) => sum + (parseFloat(row.balance) || 0), 0)
+
+  // Determine if we should show loading or no data
+  const showLoading = loading || initialLoading
+  const showNoData = !showLoading && data.length === 0
+  const showTableData = !showLoading && data.length > 0
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
@@ -404,9 +411,9 @@ function App() {
                   <th className="p-3 lg:p-4 text-left">
                     <input
                       type="checkbox"
-                      checked={data.length > 0 && selectedRows.length === data.length}
+                      checked={showTableData && selectedRows.length === data.length}
                       onChange={toggleSelectAll}
-                      disabled={loading}
+                      disabled={loading || !showTableData}
                       className="rounded h-4 w-4 text-blue-600"
                     />
                   </th>
@@ -420,7 +427,7 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {loading ? (
+                {showLoading ? (
                   <tr>
                     <td colSpan="8" className="p-8 text-center">
                       <div className="flex flex-col items-center">
@@ -429,7 +436,7 @@ function App() {
                       </div>
                     </td>
                   </tr>
-                ) : data.length === 0 ? (
+                ) : showNoData ? (
                   <tr>
                     <td colSpan="8" className="p-8 text-center">
                       <div className="flex flex-col items-center">
@@ -437,6 +444,7 @@ function App() {
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
                         </svg>
                         <p className="text-gray-500 text-sm">No data found</p>
+                        <p className="text-gray-400 text-xs mt-1">Try adjusting your filters</p>
                       </div>
                     </td>
                   </tr>
