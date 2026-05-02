@@ -6,8 +6,28 @@ export default function Filters({
   partyOptions,
   consigneeOptions,
   filters,
-  setFilters
+  setFilters,
+  onPartyChange,
+  onConsigneeChange,
+  loading = false,
+  isUpdating = false
 }) {
+  const handlePartyChange = (newParties) => {
+    if (onPartyChange) {
+      onPartyChange(newParties)
+    } else {
+      setFilters({ ...filters, parties: newParties })
+    }
+  }
+
+  const handleConsigneeChange = (newConsignees) => {
+    if (onConsigneeChange) {
+      onConsigneeChange(newConsignees)
+    } else {
+      setFilters({ ...filters, consignees: newConsignees })
+    }
+  }
+
   return (
     <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-100">
       <h2 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
@@ -15,6 +35,11 @@ export default function Filters({
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
         </svg>
         Advanced Filters
+        {isUpdating && (
+          <div className="ml-2">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+          </div>
+        )}
       </h2>
       
       <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -46,9 +71,11 @@ export default function Filters({
           <MultiSelect
             options={partyOptions}
             value={filters.parties}
-            onChange={(v) => setFilters({ ...filters, parties: v })}
+            onChange={handlePartyChange}
             placeholder="Select parties..."
             label="Party"
+            loading={loading && partyOptions.length === 0}
+            disabled={isUpdating}
           />
         </div>
 
@@ -56,9 +83,11 @@ export default function Filters({
           <MultiSelect
             options={consigneeOptions}
             value={filters.consignees}
-            onChange={(v) => setFilters({ ...filters, consignees: v })}
+            onChange={handleConsigneeChange}
             placeholder="Select consignees..."
             label="Consignee"
+            loading={loading && consigneeOptions.length === 0}
+            disabled={isUpdating}
           />
         </div>
       </div>

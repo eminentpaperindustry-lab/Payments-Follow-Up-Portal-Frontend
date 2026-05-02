@@ -45,6 +45,21 @@ const Toast = ({ message, type, onClose }) => {
   )
 }
 
+// Skeleton loader component for stats cards
+const StatsCardSkeleton = () => (
+  <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-gray-200 animate-pulse">
+    <div className="flex items-center justify-between">
+      <div className="flex-1">
+        <div className="h-3 lg:h-4 bg-gray-200 rounded w-20 mb-2"></div>
+        <div className="h-6 lg:h-8 bg-gray-200 rounded w-24"></div>
+      </div>
+      <div className="bg-gray-100 p-2 lg:p-3 rounded-lg">
+        <div className="w-5 h-5 lg:w-6 lg:h-6 bg-gray-200 rounded"></div>
+      </div>
+    </div>
+  </div>
+)
+
 function App() {
   const [data, setData] = useState([])
   const [selectedRows, setSelectedRows] = useState([])
@@ -55,11 +70,13 @@ function App() {
   const [isBulkAction, setIsBulkAction] = useState(false)
   const [currentBillNo, setCurrentBillNo] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [initialLoading, setInitialLoading] = useState(true) // New state for initial load
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [statsLoading, setStatsLoading] = useState(false)
   const [lastUpdated, setLastUpdated] = useState(new Date())
   const [copySuccess, setCopySuccess] = useState(false)
   const [toast, setToast] = useState(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [isUpdatingConsignees, setIsUpdatingConsignees] = useState(false) // Prevent circular updates
   
   const [filters, setFilters] = useState({
     startDate: null,
@@ -104,7 +121,7 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (partyOptions.length > 0 && filters.parties.length === 0) {
+    if (partyOptions.length > 0 && filters.parties.length === 0 && !isUpdatingConsignees) {
       setFilters(prev => ({
         ...prev,
         parties: [...partyOptions]
@@ -112,26 +129,19 @@ function App() {
     }
   }, [partyOptions])
 
+  // Load consignees when parties change
   useEffect(() => {
-    if (filters.parties.length > 0) {
-      loadConsignees()
-    } else {
+    if (filters.parties.length > 0 && !isUpdatingConsignees) {
+      loadConsigneesAndAutoSelect()
+    } else if (filters.parties.length === 0 && !isUpdatingConsignees) {
       setConsigneeOptions([])
       setFilters(prev => ({ ...prev, consignees: [] }))
     }
   }, [filters.parties])
 
+  // Load data when filters change
   useEffect(() => {
-    if (consigneeOptions.length > 0 && filters.consignees.length === 0) {
-      setFilters(prev => ({
-        ...prev,
-        consignees: [...consigneeOptions]
-      }))
-    }
-  }, [consigneeOptions])
-
-  useEffect(() => {
-    if (filters.parties.length > 0) {
+    if (filters.parties.length > 0 && !isUpdatingConsignees) {
       loadData()
     }
   }, [filters])
@@ -143,6 +153,7 @@ function App() {
         value: p,
         label: p
       }))
+
       setPartyOptions(options)
     } catch (error) {
       showToast("Error loading parties", 'error')
@@ -150,17 +161,26 @@ function App() {
     }
   }
 
-  const loadConsignees = async () => {
+  const loadConsigneesAndAutoSelect = async () => {
     try {
-      const partyNames = filters.parties.map(p => p.value)
+      setIsUpdatingConsignees(true)
+      const partyNames = filters.parties.map(p => p.value || p)
       const res = await getConsignees(partyNames)
       const options = res.data.map(c => ({
         value: c,
         label: c
       }))
       setConsigneeOptions(options)
+      
+      // Auto-select all consignees for selected parties
+      setFilters(prev => ({
+        ...prev,
+        consignees: [...options] // Select all consignees
+      }))
     } catch (error) {
       showToast("Error loading consignees", 'error')
+    } finally {
+      setIsUpdatingConsignees(false)
     }
   }
 
@@ -168,6 +188,7 @@ function App() {
     if (loading) return
     
     setLoading(true)
+    setStatsLoading(true)
     try {
       const apiFilters = {
         parties: filters.parties.map(p => p.value || p),
@@ -177,16 +198,19 @@ function App() {
       }
       
       const res = await getPayments(apiFilters)
-      setData(res.data || []) // Ensure data is always an array
+      setData(res.data || [])
+      console.log("res.data : ",res.data );
+      
       setSelectedRows([])
       setLastUpdated(new Date())
       setCopySuccess(false)
     } catch (error) {
       showToast("Failed to load data", 'error')
-      setData([]) // Set empty array on error
+      setData([])
     } finally {
       setLoading(false)
       setInitialLoading(false)
+      setStatsLoading(false)
     }
   }
 
@@ -245,10 +269,29 @@ function App() {
     }
   }
 
-  const totalBills = data.length
-  const totalBalance = data.reduce((sum, row) => sum + (parseFloat(row.balance) || 0), 0)
+  // Handle party selection change
+  const handlePartyChange = (newParties) => {
+    if (isUpdatingConsignees) return
+    
+    setFilters(prev => ({
+      ...prev,
+      parties: newParties
+    }))
+  }
 
-  // Determine if we should show loading or no data
+  // Handle consignee selection change
+  const handleConsigneeChange = (newConsignees) => {
+    if (isUpdatingConsignees) return
+    
+    setFilters(prev => ({
+      ...prev,
+      consignees: newConsignees
+    }))
+  }
+
+  const totalBills = data.length
+  const totalBalance = data.reduce((sum, row) => sum + (parseFloat(row?.BalanceRemaining) || 0), 0)
+
   const showLoading = loading || initialLoading
   const showNoData = !showLoading && data.length === 0
   const showTableData = !showLoading && data.length > 0
@@ -310,74 +353,85 @@ function App() {
           </div>
         </div>
 
-        {/* Stats Cards - Responsive Grid */}
+        {/* Stats Cards with Loading Skeletons */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6">
-          <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-blue-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs lg:text-sm text-gray-500 font-medium">Total Bills</p>
-                <p className="text-xl lg:text-3xl font-bold text-gray-800 mt-1">{totalBills}</p>
+          {statsLoading || initialLoading ? (
+            <>
+              <StatsCardSkeleton />
+              <StatsCardSkeleton />
+              <StatsCardSkeleton />
+              <StatsCardSkeleton />
+            </>
+          ) : (
+            <>
+              <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-blue-500 transition-all">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs lg:text-sm text-gray-500 font-medium">Total Bills</p>
+                    <p className="text-xl lg:text-3xl font-bold text-gray-800 mt-1">{totalBills}</p>
+                  </div>
+                  <div className="bg-blue-100 p-2 lg:p-3 rounded-lg">
+                    <svg className="w-5 h-5 lg:w-6 lg:h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                </div>
               </div>
-              <div className="bg-blue-100 p-2 lg:p-3 rounded-lg">
-                <svg className="w-5 h-5 lg:w-6 lg:h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                </svg>
-              </div>
-            </div>
-          </div>
 
-          <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-green-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs lg:text-sm text-gray-500 font-medium">Total Balance</p>
-                <p className="text-lg lg:text-3xl font-bold text-gray-800 mt-1">₹{totalBalance.toLocaleString()}</p>
+              <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-green-500 transition-all">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs lg:text-sm text-gray-500 font-medium">Total Balance</p>
+                    <p className="text-lg lg:text-3xl font-bold text-gray-800 mt-1">₹{totalBalance.toLocaleString()}</p>
+                  </div>
+                  <div className="bg-green-100 p-2 lg:p-3 rounded-lg">
+                    <svg className="w-5 h-5 lg:w-6 lg:h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  </div>
+                </div>
               </div>
-              <div className="bg-green-100 p-2 lg:p-3 rounded-lg">
-                <svg className="w-5 h-5 lg:w-6 lg:h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-              </div>
-            </div>
-          </div>
 
-          <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-purple-500">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs lg:text-sm text-gray-500 font-medium">Selected Bills</p>
-                <p className="text-xl lg:text-3xl font-bold text-gray-800 mt-1">{selectedRows.length}</p>
+              <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-purple-500 transition-all">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs lg:text-sm text-gray-500 font-medium">Selected Bills</p>
+                    <p className="text-xl lg:text-3xl font-bold text-gray-800 mt-1">{selectedRows.length}</p>
+                  </div>
+                  <div className="bg-purple-100 p-2 lg:p-3 rounded-lg">
+                    <svg className="w-5 h-5 lg:w-6 lg:h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                    </svg>
+                  </div>
+                </div>
               </div>
-              <div className="bg-purple-100 p-2 lg:p-3 rounded-lg">
-                <svg className="w-5 h-5 lg:w-6 lg:h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                </svg>
-              </div>
-            </div>
-          </div>
 
-          <div 
-            className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-orange-500 cursor-pointer hover:shadow-xl transition-all transform hover:scale-105"
-            onClick={copyBillNumbersToClipboard}
-          >
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs lg:text-sm text-gray-500 font-medium">Copy Bill Numbers</p>
-                <p className="text-sm lg:text-xl font-bold text-gray-800 mt-1">
-                  {copySuccess ? "Copied! ✓" : "Click to Copy"}
-                </p>
+              <div 
+                className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-orange-500 cursor-pointer hover:shadow-xl transition-all transform hover:scale-105"
+                onClick={copyBillNumbersToClipboard}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs lg:text-sm text-gray-500 font-medium">Copy Bill Numbers</p>
+                    <p className="text-sm lg:text-xl font-bold text-gray-800 mt-1">
+                      {copySuccess ? "Copied! ✓" : "Click to Copy"}
+                    </p>
+                  </div>
+                  <div className={`p-2 lg:p-3 rounded-lg transition-all ${copySuccess ? 'bg-green-100' : 'bg-orange-100'}`}>
+                    {copySuccess ? (
+                      <svg className="w-5 h-5 lg:w-6 lg:h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5 lg:w-6 lg:h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                      </svg>
+                    )}
+                  </div>
+                </div>
               </div>
-              <div className={`p-2 lg:p-3 rounded-lg transition-all ${copySuccess ? 'bg-green-100' : 'bg-orange-100'}`}>
-                {copySuccess ? (
-                  <svg className="w-5 h-5 lg:w-6 lg:h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                ) : (
-                  <svg className="w-5 h-5 lg:w-6 lg:h-6 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                  </svg>
-                )}
-              </div>
-            </div>
-          </div>
+            </>
+          )}
         </div>
 
         <Filters
@@ -385,6 +439,10 @@ function App() {
           consigneeOptions={consigneeOptions}
           filters={filters}
           setFilters={setFilters}
+          onPartyChange={handlePartyChange}
+          onConsigneeChange={handleConsigneeChange}
+          loading={initialLoading}
+          isUpdating={isUpdatingConsignees}
         />
 
         {selectedRows.length > 0 && (
@@ -397,12 +455,12 @@ function App() {
               <svg className="w-4 h-4 lg:w-5 lg:h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              <span>Update Selected ({selectedRows.length})</span>
+              <span>Bulk FollowUp ({selectedRows.length})</span>
             </button>
           </div>
         )}
 
-        {/* Table - Horizontal Scroll on Mobile */}
+        {/* Table Section */}
         <div className="mt-6 bg-white rounded-xl shadow-lg overflow-hidden border border-gray-200">
           <div className="overflow-x-auto">
             <table className="w-full min-w-[800px] lg:min-w-full">
@@ -461,7 +519,7 @@ function App() {
                           onChange={() => toggleRowSelection(row.billNo)}
                           className="rounded h-4 w-4 text-blue-600"
                         />
-                      </td>
+                       </td>
                       <td className="p-3 lg:p-4 text-sm font-medium text-gray-900">{row.billNo}</td>
                       <td className="p-3 lg:p-4 text-sm text-gray-600 hidden sm:table-cell">{row.party}</td>
                       <td className="p-3 lg:p-4 text-sm text-gray-600 hidden md:table-cell">{row.consignee}</td>
@@ -487,7 +545,7 @@ function App() {
                           <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
-                          <span className="hidden xs:inline">Follow Up</span>
+                          <span>Follow Up</span>
                         </button>
                       </td>
                     </tr>
@@ -499,7 +557,7 @@ function App() {
         </div>
       </div>
 
-      {/* Improved Modal */}
+      {/* Modal */}
       {showDatePicker && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md mx-4">

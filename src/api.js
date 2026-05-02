@@ -1,16 +1,42 @@
 import axios from "axios"
 
-// const API = "http://localhost:5003/api/payments"
-const API = "https://payments-follow-up-portal.onrender.com/api/payments"
+const API = process.env.REACT_APP_API_URL || "http://localhost:5003/api/payments"
 
+// Create axios instance with interceptors for cache control
+const apiClient = axios.create({
+  baseURL: API,
+  timeout: 30000, // 30 seconds timeout
+  headers: {
+    'Content-Type': 'application/json',
+  }
+})
+
+// Add request interceptor to handle cache busting
+apiClient.interceptors.request.use((config) => {
+  // Add timestamp to prevent browser cache for GET requests after updates
+  if (config.method === 'get' && config.params?.skipCache) {
+    config.params._t = Date.now()
+    delete config.params.skipCache
+  }
+  return config
+})
+
+// Add response interceptor for error handling
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error("API Error:", error.response?.data || error.message)
+    return Promise.reject(error)
+  }
+)
 
 export const getParties = () => {
-  return axios.get(API + "/parties")
+  return apiClient.get("/parties")
 }
 
 export const getConsignees = (parties) => {
   const partiesParam = parties && parties.length ? parties.join(",") : ""
-  return axios.get(API + "/consignees", {
+  return apiClient.get("/consignees", {
     params: {
       parties: partiesParam
     }
@@ -18,7 +44,6 @@ export const getConsignees = (parties) => {
 }
 
 export const getPayments = (filters) => {
-  // Safely extract values
   let partiesParam = ""
   let consigneesParam = ""
   
@@ -30,26 +55,31 @@ export const getPayments = (filters) => {
     consigneesParam = filters.consignees.map(c => c.value || c).join(",")
   }
   
-  return axios.get(API, {
+  return apiClient.get("/", {
     params: {
       startDate: filters.startDate || "",
       endDate: filters.endDate || "",
       parties: partiesParam,
-      consignees: consigneesParam
+      consignees: consigneesParam,
+      skipCache: filters.skipCache || false
     }
   })
 }
 
 export const updateSingleFollowUp = (billNumber, followUpDate) => {
-  return axios.post(API + "/update-followup-single", {
+  return apiClient.post("/update-followup-single", {
     billNumber,
     followUpDate
   })
 }
 
 export const updateBulkFollowUp = (billNumbers, followUpDate) => {
-  return axios.post(API + "/update-followup", {
+  return apiClient.post("/update-followup", {
     billNumbers,
     followUpDate
   })
+}
+
+export const clearCache = () => {
+  return apiClient.post("/clear-cache")
 }
