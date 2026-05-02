@@ -76,7 +76,7 @@ function App() {
   const [copySuccess, setCopySuccess] = useState(false)
   const [toast, setToast] = useState(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
-  const [isUpdatingConsignees, setIsUpdatingConsignees] = useState(false) // Prevent circular updates
+  const [isUpdatingConsignees, setIsUpdatingConsignees] = useState(false)
   
   const [filters, setFilters] = useState({
     startDate: null,
@@ -116,10 +116,12 @@ function App() {
     }
   }
 
+  // Load parties on mount
   useEffect(() => {
     loadParties()
   }, [])
 
+  // Auto-select all parties initially
   useEffect(() => {
     if (partyOptions.length > 0 && filters.parties.length === 0 && !isUpdatingConsignees) {
       setFilters(prev => ({
@@ -134,6 +136,7 @@ function App() {
     if (filters.parties.length > 0 && !isUpdatingConsignees) {
       loadConsigneesAndAutoSelect()
     } else if (filters.parties.length === 0 && !isUpdatingConsignees) {
+      // Clear consignees when no parties selected
       setConsigneeOptions([])
       setFilters(prev => ({ ...prev, consignees: [] }))
     }
@@ -141,30 +144,46 @@ function App() {
 
   // Load data when filters change
   useEffect(() => {
+    // Only load data if parties are selected
     if (filters.parties.length > 0 && !isUpdatingConsignees) {
       loadData()
+    } else if (filters.parties.length === 0 && !isUpdatingConsignees) {
+      // Clear data when no parties selected
+      setData([])
+      setSelectedRows([])
+      setInitialLoading(false)
     }
   }, [filters])
 
   const loadParties = async () => {
     try {
+      setInitialLoading(true)
       const res = await getParties()
       const options = res.data.map(p => ({
         value: p,
         label: p
       }))
-
       setPartyOptions(options)
     } catch (error) {
       showToast("Error loading parties", 'error')
+    } finally {
       setInitialLoading(false)
     }
   }
 
   const loadConsigneesAndAutoSelect = async () => {
+    // Don't call API if no parties selected
+    if (!filters.parties || filters.parties.length === 0) {
+      setConsigneeOptions([])
+      setFilters(prev => ({ ...prev, consignees: [] }))
+      return
+    }
+    
     try {
       setIsUpdatingConsignees(true)
       const partyNames = filters.parties.map(p => p.value || p)
+      console.log("🔍 Loading consignees for parties:", partyNames)
+      
       const res = await getConsignees(partyNames)
       const options = res.data.map(c => ({
         value: c,
@@ -175,9 +194,10 @@ function App() {
       // Auto-select all consignees for selected parties
       setFilters(prev => ({
         ...prev,
-        consignees: [...options] // Select all consignees
+        consignees: [...options]
       }))
     } catch (error) {
+      console.error("Error loading consignees:", error)
       showToast("Error loading consignees", 'error')
     } finally {
       setIsUpdatingConsignees(false)
@@ -197,14 +217,17 @@ function App() {
         endDate: formatLocalDate(filters.endDate)
       }
       
+      console.log("🔍 Fetching payments with filters:", apiFilters)
+      
       const res = await getPayments(apiFilters)
       setData(res.data || [])
-      console.log("res.data : ",res.data );
+      console.log("📊 Data loaded:", res.data?.length || 0, "records")
       
       setSelectedRows([])
       setLastUpdated(new Date())
       setCopySuccess(false)
     } catch (error) {
+      console.error("Error loading data:", error)
       showToast("Failed to load data", 'error')
       setData([])
     } finally {
@@ -263,6 +286,7 @@ function App() {
       await loadData()
       
     } catch (error) {
+      console.error("Error updating follow up:", error)
       showToast("Failed to update follow up", 'error')
     } finally {
       setLoading(false)
@@ -272,6 +296,8 @@ function App() {
   // Handle party selection change
   const handlePartyChange = (newParties) => {
     if (isUpdatingConsignees) return
+    
+    console.log("🔄 Party changed:", newParties.length, "parties selected")
     
     setFilters(prev => ({
       ...prev,
@@ -283,6 +309,8 @@ function App() {
   const handleConsigneeChange = (newConsignees) => {
     if (isUpdatingConsignees) return
     
+    console.log("🔄 Consignee changed:", newConsignees.length, "consignees selected")
+    
     setFilters(prev => ({
       ...prev,
       consignees: newConsignees
@@ -290,8 +318,19 @@ function App() {
   }
 
   const totalBills = data.length
-  const totalBalance = data.reduce((sum, row) => sum + (parseFloat(row?.BalanceRemaining) || 0), 0)
-
+const totalBalance = data.reduce((sum, row) => {
+  const value = row?.BalanceRemaining;
+  
+  // Skip invalid values
+  if (!value || value === "" || value === "-" || value === "0") return sum;
+  
+  // Remove commas and convert to number
+  const cleanValue = value.toString().replace(/,/g, '');
+  const numericValue = parseFloat(cleanValue);
+  
+  // Add only if valid number
+  return sum + (isNaN(numericValue) ? 0 : numericValue);
+}, 0);
   const showLoading = loading || initialLoading
   const showNoData = !showLoading && data.length === 0
   const showTableData = !showLoading && data.length > 0
@@ -519,7 +558,7 @@ function App() {
                           onChange={() => toggleRowSelection(row.billNo)}
                           className="rounded h-4 w-4 text-blue-600"
                         />
-                       </td>
+                      </td>
                       <td className="p-3 lg:p-4 text-sm font-medium text-gray-900">{row.billNo}</td>
                       <td className="p-3 lg:p-4 text-sm text-gray-600 hidden sm:table-cell">{row.party}</td>
                       <td className="p-3 lg:p-4 text-sm text-gray-600 hidden md:table-cell">{row.consignee}</td>

@@ -5,7 +5,7 @@ const API = process.env.REACT_APP_API_URL || "http://localhost:5003/api/payments
 // Create axios instance with interceptors for cache control
 const apiClient = axios.create({
   baseURL: API,
-  timeout: 30000, // 30 seconds timeout
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   }
@@ -13,7 +13,6 @@ const apiClient = axios.create({
 
 // Add request interceptor to handle cache busting
 apiClient.interceptors.request.use((config) => {
-  // Add timestamp to prevent browser cache for GET requests after updates
   if (config.method === 'get' && config.params?.skipCache) {
     config.params._t = Date.now()
     delete config.params.skipCache
@@ -30,30 +29,29 @@ apiClient.interceptors.response.use(
   }
 )
 
+// Helper: Encode party/consignee names with special separator
+const encodeNames = (names) => {
+  if (!names || names.length === 0) return ""
+  return names.map(n => encodeURIComponent(n.value || n)).join('|||')
+}
+
 export const getParties = () => {
   return apiClient.get("/parties")
 }
 
 export const getConsignees = (parties) => {
-  const partiesParam = parties && parties.length ? parties.join(",") : ""
+  const partiesParam = encodeNames(parties)
+  console.log("🔍 Fetching consignees for parties:", parties)
   return apiClient.get("/consignees", {
-    params: {
-      parties: partiesParam
-    }
+    params: { parties: partiesParam }
   })
 }
 
 export const getPayments = (filters) => {
-  let partiesParam = ""
-  let consigneesParam = ""
+  const partiesParam = encodeNames(filters.parties || [])
+  const consigneesParam = encodeNames(filters.consignees || [])
   
-  if (filters.parties && Array.isArray(filters.parties) && filters.parties.length > 0) {
-    partiesParam = filters.parties.map(p => p.value || p).join(",")
-  }
-  
-  if (filters.consignees && Array.isArray(filters.consignees) && filters.consignees.length > 0) {
-    consigneesParam = filters.consignees.map(c => c.value || c).join(",")
-  }
+  console.log("🔍 Fetching payments with parties:", filters.parties)
   
   return apiClient.get("/", {
     params: {
