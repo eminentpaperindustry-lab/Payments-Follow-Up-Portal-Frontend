@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useRef, useCallback } from "react"
 import DatePicker from "react-datepicker"
 import "react-datepicker/dist/react-datepicker.css"
 import { 
@@ -10,7 +10,7 @@ import {
 } from "./api"
 import Filters from "./components/Filters"
 
-// Toast Component
+// Toast Component (same as before)
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -45,7 +45,6 @@ const Toast = ({ message, type, onClose }) => {
   )
 }
 
-// Skeleton loader component for stats cards
 const StatsCardSkeleton = () => (
   <div className="bg-white rounded-xl shadow-lg p-4 lg:p-6 border-l-4 border-gray-200 animate-pulse">
     <div className="flex items-center justify-between">
@@ -58,6 +57,19 @@ const StatsCardSkeleton = () => (
       </div>
     </div>
   </div>
+)
+
+const TableRowSkeleton = () => (
+  <tr className="border-b border-gray-100 animate-pulse">
+    <td className="p-3 lg:p-4"><div className="h-4 w-4 bg-gray-200 rounded"></div></td>
+    <td className="p-3 lg:p-4"><div className="h-4 bg-gray-200 rounded w-20"></div></td>
+    <td className="p-3 lg:p-4 hidden sm:table-cell"><div className="h-4 bg-gray-200 rounded w-32"></div></td>
+    <td className="p-3 lg:p-4 hidden md:table-cell"><div className="h-4 bg-gray-200 rounded w-28"></div></td>
+    <td className="p-3 lg:p-4 hidden lg:table-cell"><div className="h-4 bg-gray-200 rounded w-24"></div></td>
+    <td className="p-3 lg:p-4"><div className="h-4 bg-gray-200 rounded w-20"></div></td>
+    <td className="p-3 lg:p-4 hidden md:table-cell"><div className="h-4 bg-gray-200 rounded w-28"></div></td>
+    <td className="p-3 lg:p-4"><div className="h-8 bg-gray-200 rounded w-20"></div></td>
+  </tr>
 )
 
 function App() {
@@ -77,6 +89,9 @@ function App() {
   const [toast, setToast] = useState(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const [isUpdatingConsignees, setIsUpdatingConsignees] = useState(false)
+  const [isLoadingParties, setIsLoadingParties] = useState(false)
+  
+  const currentRequestRef = useRef(null)
   
   const [filters, setFilters] = useState({
     startDate: null,
@@ -116,123 +131,261 @@ function App() {
     }
   }
 
-  // Load parties on mount
+  // Load parties when date range changes
   useEffect(() => {
     loadParties()
-  }, [])
+  }, [filters.startDate, filters.endDate])
 
-  // Auto-select all parties initially
+  // Load consignees when parties change and auto-select them
   useEffect(() => {
-    if (partyOptions.length > 0 && filters.parties.length === 0 && !isUpdatingConsignees) {
-      setFilters(prev => ({
-        ...prev,
-        parties: [...partyOptions]
-      }))
+    const loadAndSelectConsignees = async () => {
+      if (filters.parties.length > 0) {
+        await loadConsignees()
+      } else {
+        setConsigneeOptions([])
+        setFilters(prev => ({ ...prev, consignees: [] }))
+        setData([])
+      }
     }
-  }, [partyOptions])
-
-  // Load consignees when parties change
-  useEffect(() => {
-    if (filters.parties.length > 0 && !isUpdatingConsignees) {
-      loadConsigneesAndAutoSelect()
-    } else if (filters.parties.length === 0 && !isUpdatingConsignees) {
-      // Clear consignees when no parties selected
-      setConsigneeOptions([])
-      setFilters(prev => ({ ...prev, consignees: [] }))
-    }
+    
+    loadAndSelectConsignees()
   }, [filters.parties])
 
-  // Load data when filters change
+  // Load data when consignees, parties, or dates change
   useEffect(() => {
-    // Only load data if parties are selected
-    if (filters.parties.length > 0 && !isUpdatingConsignees) {
+    if (filters.parties.length > 0 && filters.consignees.length > 0) {
       loadData()
-    } else if (filters.parties.length === 0 && !isUpdatingConsignees) {
-      // Clear data when no parties selected
+    } else {
       setData([])
       setSelectedRows([])
-      setInitialLoading(false)
     }
-  }, [filters])
+  }, [filters.consignees, filters.parties, filters.startDate, filters.endDate])
 
   const loadParties = async () => {
     try {
+      setIsLoadingParties(true)
       setInitialLoading(true)
-      const res = await getParties()
+      
+      const params = {}
+      if (filters.startDate) params.startDate = formatLocalDate(filters.startDate)
+      if (filters.endDate) params.endDate = formatLocalDate(filters.endDate)
+      
+      console.log("📅 Loading parties with params:", params)
+      const res = await getParties(params)
+      
       const options = res.data.map(p => ({
         value: p,
         label: p
       }))
       setPartyOptions(options)
+      
+      // Auto-select all parties if none selected and options exist
+      if (options.length > 0 && filters.parties.length === 0) {
+        setFilters(prev => ({
+          ...prev,
+          parties: [...options]
+        }))
+      } else if (filters.parties.length > 0) {
+        // Remove parties that no longer exist
+        const currentPartyValues = filters.parties.map(p => p.value || p)
+        const validParties = options.filter(opt => 
+          currentPartyValues.includes(opt.value)
+        )
+        
+        if (validParties.length !== filters.parties.length) {
+          console.log(`Removing ${filters.parties.length - validParties.length} parties`)
+          setFilters(prev => ({
+            ...prev,
+            parties: validParties
+          }))
+        }
+      }
+      
+      console.log(`✅ Loaded ${options.length} parties`)
     } catch (error) {
+      console.error("Error loading parties:", error)
       showToast("Error loading parties", 'error')
     } finally {
+      setIsLoadingParties(false)
       setInitialLoading(false)
     }
   }
 
-  const loadConsigneesAndAutoSelect = async () => {
-    // Don't call API if no parties selected
-    if (!filters.parties || filters.parties.length === 0) {
-      setConsigneeOptions([])
-      setFilters(prev => ({ ...prev, consignees: [] }))
-      return
-    }
+  const loadConsignees = async () => {
+    if (!filters.parties || filters.parties.length === 0) return
     
     try {
       setIsUpdatingConsignees(true)
       const partyNames = filters.parties.map(p => p.value || p)
-      console.log("🔍 Loading consignees for parties:", partyNames)
       
-      const res = await getConsignees(partyNames)
+      const params = {}
+      if (filters.startDate) params.startDate = formatLocalDate(filters.startDate)
+      if (filters.endDate) params.endDate = formatLocalDate(filters.endDate)
+      
+      console.log("👥 Loading consignees for parties:", partyNames)
+      
+      const res = await getConsignees(partyNames, params)
       const options = res.data.map(c => ({
         value: c,
         label: c
       }))
       setConsigneeOptions(options)
       
-      // Auto-select all consignees for selected parties
-      setFilters(prev => ({
-        ...prev,
-        consignees: [...options]
-      }))
+      // AUTO-SELECT ALL CONSIGNEES
+      if (options.length > 0) {
+        console.log(`✅ Auto-selecting all ${options.length} consignees`)
+        setFilters(prev => ({
+          ...prev,
+          consignees: [...options]
+        }))
+      } else {
+        setFilters(prev => ({
+          ...prev,
+          consignees: []
+        }))
+        setData([])
+      }
+      
+      console.log(`✅ Loaded ${options.length} consignees`)
     } catch (error) {
       console.error("Error loading consignees:", error)
       showToast("Error loading consignees", 'error')
+      setConsigneeOptions([])
     } finally {
       setIsUpdatingConsignees(false)
     }
   }
 
   const loadData = async () => {
-    if (loading) return
+    if (filters.parties.length === 0 || filters.consignees.length === 0) {
+      setData([])
+      setSelectedRows([])
+      return
+    }
     
-    setLoading(true)
+    // Clear old data and show skeleton
+    setData([])
+    setSelectedRows([])
     setStatsLoading(true)
+    
+    const requestId = Date.now()
+    currentRequestRef.current = requestId
+    
     try {
       const apiFilters = {
         parties: filters.parties.map(p => p.value || p),
         consignees: filters.consignees.map(c => c.value || c),
         startDate: formatLocalDate(filters.startDate),
-        endDate: formatLocalDate(filters.endDate)
+        endDate: formatLocalDate(filters.endDate),
+        skipCache: true
       }
       
-      console.log("🔍 Fetching payments with filters:", apiFilters)
+      console.log("📊 Fetching payments with filters:", apiFilters)
       
       const res = await getPayments(apiFilters)
-      setData(res.data || [])
-      console.log("📊 Data loaded:", res.data?.length || 0, "records")
       
-      setSelectedRows([])
+      if (currentRequestRef.current !== requestId) {
+        console.log("Skipping stale data")
+        return
+      }
+      
+      setData(res.data || [])
+      console.log("✅ Data loaded:", res.data?.length || 0, "records")
       setLastUpdated(new Date())
       setCopySuccess(false)
     } catch (error) {
       console.error("Error loading data:", error)
-      showToast("Failed to load data", 'error')
-      setData([])
+      if (currentRequestRef.current === requestId) {
+        showToast("Failed to load data", 'error')
+        setData([])
+      }
     } finally {
-      setLoading(false)
-      setInitialLoading(false)
+      if (currentRequestRef.current === requestId) {
+        setStatsLoading(false)
+      }
+    }
+  }
+
+  // ============================================================
+  // REFRESH FUNCTION - Direct data reload after update
+  // ============================================================
+  const refreshAllData = async () => {
+    console.log("🔄 Refreshing all data after update...")
+    
+    // Show loading
+    setStatsLoading(true)
+    setData([])
+    
+    try {
+      // Get current filter values
+      const currentStartDate = filters.startDate
+      const currentEndDate = filters.endDate
+      const currentParties = filters.parties
+      const currentConsignees = filters.consignees
+      
+      // Build params
+      const params = {}
+      if (currentStartDate) params.startDate = formatLocalDate(currentStartDate)
+      if (currentEndDate) params.endDate = formatLocalDate(currentEndDate)
+      
+      // Step 1: Reload parties
+      console.log("Step 1: Reloading parties...")
+      const partiesRes = await getParties(params)
+      const newParties = partiesRes.data.map(p => ({ value: p, label: p }))
+      setPartyOptions(newParties)
+      
+      // Update parties filter (remove completed ones)
+      if (currentParties.length > 0) {
+        const currentPartyValues = currentParties.map(p => p.value || p)
+        const validParties = newParties.filter(opt => 
+          currentPartyValues.includes(opt.value)
+        )
+        setFilters(prev => ({ ...prev, parties: validParties }))
+        
+        // Step 2: Reload consignees for valid parties
+        if (validParties.length > 0) {
+          console.log("Step 2: Reloading consignees...")
+          const partyNames = validParties.map(p => p.value || p)
+          const consigneesRes = await getConsignees(partyNames, params)
+          const newConsignees = consigneesRes.data.map(c => ({ value: c, label: c }))
+          setConsigneeOptions(newConsignees)
+          
+          // Update consignees filter
+          if (newConsignees.length > 0) {
+            setFilters(prev => ({ ...prev, consignees: [...newConsignees] }))
+            
+            // Step 3: Reload data
+            console.log("Step 3: Reloading data...")
+            const dataFilters = {
+              parties: validParties.map(p => p.value || p),
+              consignees: newConsignees.map(c => c.value || c),
+              startDate: formatLocalDate(currentStartDate),
+              endDate: formatLocalDate(currentEndDate),
+              skipCache: true
+            }
+            
+            const dataRes = await getPayments(dataFilters)
+            setData(dataRes.data || [])
+            console.log(`✅ Data reloaded: ${dataRes.data?.length || 0} records`)
+            setLastUpdated(new Date())
+          } else {
+            setFilters(prev => ({ ...prev, consignees: [] }))
+            setData([])
+          }
+        } else {
+          setFilters(prev => ({ ...prev, consignees: [] }))
+          setData([])
+        }
+      } else if (newParties.length > 0) {
+        // Auto-select all parties
+        setFilters(prev => ({ ...prev, parties: [...newParties] }))
+        // This will trigger the useEffect to load consignees and data
+      }
+      
+    } catch (error) {
+      console.error("Error refreshing data:", error)
+      showToast("Error refreshing data", 'error')
+    } finally {
       setStatsLoading(false)
     }
   }
@@ -272,10 +425,13 @@ function App() {
     const date = formatLocalDate(selectedDate)
     
     setLoading(true)
+    setStatsLoading(true)
+    setData([])
+    
     try {
       if (isBulkAction) {
-        await updateBulkFollowUp(selectedRows, date)
-        showToast(`${selectedRows.length} bills updated successfully!`, 'success')
+        const response = await updateBulkFollowUp(selectedRows, date)
+        showToast(`${response.data.updatedCount || selectedRows.length} bills updated successfully!`, 'success')
         setSelectedRows([])
       } else {
         await updateSingleFollowUp(currentBillNo, date)
@@ -283,67 +439,58 @@ function App() {
       }
       
       setShowDatePicker(false)
-      await loadData()
+      
+      // CRITICAL: Direct refresh instead of relying on useEffect chain
+      await refreshAllData()
       
     } catch (error) {
       console.error("Error updating follow up:", error)
-      showToast("Failed to update follow up", 'error')
+      showToast(error.response?.data?.error || "Failed to update follow up", 'error')
+      setStatsLoading(false)
     } finally {
       setLoading(false)
     }
   }
 
-  // Handle party selection change
   const handlePartyChange = (newParties) => {
     if (isUpdatingConsignees) return
-    
-    console.log("🔄 Party changed:", newParties.length, "parties selected")
-    
-    setFilters(prev => ({
-      ...prev,
-      parties: newParties
-    }))
+    console.log("🔄 Party changed:", newParties.length)
+    setFilters(prev => ({ ...prev, parties: newParties }))
   }
 
-  // Handle consignee selection change
   const handleConsigneeChange = (newConsignees) => {
     if (isUpdatingConsignees) return
-    
-    console.log("🔄 Consignee changed:", newConsignees.length, "consignees selected")
-    
-    setFilters(prev => ({
-      ...prev,
-      consignees: newConsignees
-    }))
+    console.log("🔄 Consignee changed:", newConsignees.length)
+    setFilters(prev => ({ ...prev, consignees: newConsignees }))
+  }
+
+  const handleDateRangeChange = (start, end) => {
+    console.log("📅 Date range changed:", start, end)
+    setFilters({
+      startDate: start,
+      endDate: end,
+      parties: [],
+      consignees: []
+    })
   }
 
   const totalBills = data.length
-const totalBalance = data.reduce((sum, row) => {
-  const value = row?.BalanceRemaining;
+  const totalBalance = data.reduce((sum, row) => {
+    const value = row?.BalanceRemaining
+    if (!value || value === "" || value === "-" || value === "0") return sum
+    const cleanValue = value.toString().replace(/,/g, '')
+    const numericValue = parseFloat(cleanValue)
+    return sum + (isNaN(numericValue) ? 0 : numericValue)
+  }, 0)
   
-  // Skip invalid values
-  if (!value || value === "" || value === "-" || value === "0") return sum;
-  
-  // Remove commas and convert to number
-  const cleanValue = value.toString().replace(/,/g, '');
-  const numericValue = parseFloat(cleanValue);
-  
-  // Add only if valid number
-  return sum + (isNaN(numericValue) ? 0 : numericValue);
-}, 0);
-  const showLoading = loading || initialLoading
+  const showLoading = loading || initialLoading || statsLoading
   const showNoData = !showLoading && data.length === 0
   const showTableData = !showLoading && data.length > 0
+  const showTableSkeletons = statsLoading && data.length === 0
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
-      {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type} 
-          onClose={() => setToast(null)} 
-        />
-      )}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
       {/* Mobile Header */}
       <div className="lg:hidden bg-gradient-to-r from-blue-600 to-blue-800 text-white p-4 sticky top-0 z-40 shadow-lg">
@@ -371,18 +518,18 @@ const totalBalance = data.reduce((sum, row) => {
                 </svg>
                 Payments Follow Up Portal
               </h1>
-              <p className="text-blue-100 mt-1">Manage your follow-ups efficiently</p>
+              <p className="text-blue-100 mt-1">Select filters to view pending bills</p>
             </div>
             <div className="flex items-center gap-3">
               <button
-                onClick={loadData}
-                disabled={loading}
+                onClick={() => refreshAllData()}
+                disabled={loading || isLoadingParties}
                 className="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-all flex items-center gap-2 disabled:opacity-50"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
-                {loading ? "Refreshing..." : "Refresh"}
+                {isLoadingParties ? "Loading..." : "Refresh"}
               </button>
               <div className="bg-white/20 rounded-lg px-4 py-2">
                 <span className="text-sm opacity-90">Last Updated:</span>
@@ -392,7 +539,7 @@ const totalBalance = data.reduce((sum, row) => {
           </div>
         </div>
 
-        {/* Stats Cards with Loading Skeletons */}
+        {/* Stats Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 mb-6">
           {statsLoading || initialLoading ? (
             <>
@@ -480,6 +627,7 @@ const totalBalance = data.reduce((sum, row) => {
           setFilters={setFilters}
           onPartyChange={handlePartyChange}
           onConsigneeChange={handleConsigneeChange}
+          onDateRangeChange={handleDateRangeChange}
           loading={initialLoading}
           isUpdating={isUpdatingConsignees}
         />
@@ -524,15 +672,14 @@ const totalBalance = data.reduce((sum, row) => {
                 </tr>
               </thead>
               <tbody>
-                {showLoading ? (
-                  <tr>
-                    <td colSpan="8" className="p-8 text-center">
-                      <div className="flex flex-col items-center">
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-3"></div>
-                        <p className="text-gray-500 text-sm">Loading data...</p>
-                      </div>
-                    </td>
-                  </tr>
+                {showLoading && showTableSkeletons ? (
+                  <>
+                    <TableRowSkeleton />
+                    <TableRowSkeleton />
+                    <TableRowSkeleton />
+                    <TableRowSkeleton />
+                    <TableRowSkeleton />
+                  </>
                 ) : showNoData ? (
                   <tr>
                     <td colSpan="8" className="p-8 text-center">
@@ -540,7 +687,7 @@ const totalBalance = data.reduce((sum, row) => {
                         <svg className="w-12 h-12 text-gray-400 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
                         </svg>
-                        <p className="text-gray-500 text-sm">No data found</p>
+                        <p className="text-gray-500 text-sm">No pending bills found</p>
                         <p className="text-gray-400 text-xs mt-1">Try adjusting your filters</p>
                       </div>
                     </td>
